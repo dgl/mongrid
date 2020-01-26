@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<link rel="stylesheet" href="https://leeoniya.github.io/uPlot/src/uPlot.css">
+<script src="https://leeoniya.github.io/uPlot/dist/uPlot.iife.js"></script>
+<script src="grid.js"></script>
+<script src="promapi.js"></script>
+<style>
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#header {
+  background: #f2f2f2;
+  border-bottom: 1px solid #ddd;
+  flex: 1 0 100%;
+  height: 1.2em;
+  padding: .1em;
+  max-height: 1.2em;
+  display: flex;
+  font-family: monospace;
+}
+
+#header input {
+  font-family: monospace;
+}
+
+#title {
+  flex: 1;
+  flex-basis: 50%;
+}
+
+#timerange {
+  flex: 1;
+  justify-content: right;
+  text-align: right;
+}
+
+#range {
+}
+
+input#api, #range input, #range button {
+  background: #f6f6f6;
+  border-radius: 4px;
+  outline: none;
+}
+
+#time {
+  padding: 0 .5em;
+}
+
+#time-input.default {
+  color: #ccc;
+}
+
+#range input, #time input {
+  border: 0;
+  background: #f6f6f6;
+  border-radius: 4px;
+  text-align: center;
+  outline: none;
+}
+
+#container {
+  display: flex;
+  margin: 0;
+  height: calc(100% - 1.2em);
+  overflow: hidden;
+}
+
+#sidebar {
+  flex: 0 0 100px;
+  overflow: hidden;
+  overflow-y: scroll;
+  padding: 2px;
+}
+
+#move {
+  /* https://stackoverflow.com/questions/46931103/making-a-dragbar-to-resize-divs-inside-css-grids */
+  height: 100%;
+  flex: 0 0 2px;
+  background: #ddd;
+  cursor: ew-resize;
+}
+
+#main {
+  flex: 0 1 100%;
+  overflow: scroll;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px;
+  height: calc(100% - 12px);
+  grid-gap: 8px;
+}
+
+.graph-cont {
+  border: 1px solid #ccc;
+  box-sizing: border-box;
+  border-radius: 3px;
+  padding: 0;
+}
+
+.graph-title {
+  margin: 0;
+  height: 14px;
+  padding: 0px 6px;
+  background: #f2f2f2;
+  font-size: 12px;
+}
+
+.graph-title textarea {
+  font-size: 120%;
+  width: 95%;
+  z-index: 100;
+}
+
+.graph-edit {
+  z-index: 100;
+  height: 5em;
+}
+
+.graph-item {
+  position: relative;
+  box-sizing: border-box;
+  top: 2px;
+  height: calc(100% - 18px);
+}
+
+.label {
+  background: #e0ffdd;
+  font-weight: bold;
+  padding: 2px;
+}
+
+.value:hover {
+  background: #eee;
+}
+
+</style>
+
+<body>
+  <div id="header">
+    <div id="title"><input id="api" value="http://demo.robustperception.io:9090"></div>
+    <div id="timerange"></div>
+      <div id="range">
+        <button onclick="adjust(-1)">-</button>
+        <input id="duration-input" value="2h" size="3">
+        <button onclick="adjust(1)">+</button>
+      </div>
+      <div id="time"><input id="time-input" value="" size="24"></div>
+  </div>
+  </div>
+  <div id="container">
+    <div id="sidebar"></div>
+    <div id="move"></div>
+    <div id="main"></div>
+  </div>
+  <script>
+
+    let promapi = new PromAPI(api.value);
+    api.addEventListener("change", e => {
+      promapi = new PromAPI(api.value);
+    });
+
+    const ranges = ["2y", "1y", "12w", "4w", "1w", "4d", "2d", "1d", "12h", "8h", "4h", "2h", "1h", "30m", "15m"];
+
+    let grid = new Grid(document.querySelector("#main"), 2, 1);
+
+    // TODO: turn resizing into class
+
+    let sidebar = document.querySelector("#sidebar");
+    sidebar.style.flexBasis = getComputedStyle(sidebar)["flex-basis"];
+    let move = document.querySelector('#move');
+    move.addEventListener("click", function(e) {
+      if (sidebar.style.flexBasis.match(/(\d+)/)[0] < 60) {
+        sidebar.style.flexBasis = "100px";
+        sidebar.style.display = "";
+        move.style.flexBasis = "2px";
+        graph.resize();
+      }
+    });
+    move.addEventListener("dblclick", function(e) {
+      if (sidebar.style.flexBasis.match(/(\d+)/)[0] >= 60) {
+        sidebar.style.flexBasis = "0px";
+        sidebar.style.display = "none";
+        move.style.flexBasis = "5px";
+        graph.resize();
+      }
+    });
+    document.addEventListener('mousedown', function(e) {
+      // If mousedown event is fired from .handler, toggle flag to true
+      if (e.target === move) {
+	let sidebarDragging = function(e) {
+
+          let boxA = sidebar; // XXX
+
+          // Arbitrary minimum width set on box A, otherwise its inner content will collapse to width of 0
+          var boxAminWidth = 60;
+
+          // Resize box A
+          // * 8px is the left/right spacing between .handler and its inner pseudo-element
+          // * Set flex-grow to 0 to prevent it from growing
+          boxA.style.flexBasis = (Math.max(boxAminWidth, e.clientX)) + 'px';
+          boxA.style.flexGrow = 0;
+        };
+        document.addEventListener('mousemove', sidebarDragging);
+        document.addEventListener('mouseup', function(e) {
+          // Turn off dragging flag when user mouse is up
+          document.removeEventListener('mousemove', sidebarDragging);
+          graph.resize();
+        }, { once: true});
+        }
+    });
+
+    function labelSelect() {
+      return {
+        setSeries: [
+          (u, idx) => {
+            if (idx) {
+              //sidebar.textContent = u.series[idx].label;
+            }
+            const d = u.data[0][u.cursor.idx];
+            if (d) {
+              document.querySelector("#time-input").className = "";
+              document.querySelector("#time-input").value = formatTimestamp(new Date(1000*d));
+            }
+          }
+        ],
+      };
+    }
+
+   function formatTimestamp(d) {
+     return [
+       Intl.DateTimeFormat("en", {year: "numeric"}).format(d),
+       Intl.DateTimeFormat("en", {month: "2-digit"}).format(d),
+       Intl.DateTimeFormat("en", {day: "2-digit"}).format(d),
+     ].join("-") + " " + Intl.DateTimeFormat("en", {
+       hour: "2-digit",
+       minute: "2-digit",
+       second: "2-digit",
+       hour12: false,
+       timeZone: "UTC",
+       timeZoneName: "short",
+     }).format(d);
+   }
+
+
+const durations = {s: 1, m: 60, h: 60*60, d: 60*60*24, w: 60*60*24*7, y: 60*60*24*365};
+function durationParse(d) {
+  const durationRE = /(\d+)([smhdwy])/i;
+  let res = 0;
+  d = d.replace(/ /g, "");
+  while(durationRE.test(d)) {
+    res += RegExp.$1 * durations[RegExp.$2.toLowerCase()];
+    d = d.replace(durationRE, "");
+  }
+  res += 1*d;
+  return res;
+}
+
+
+  let globalOptions = {
+    endTime: new Date(),
+    duration: document.querySelector("#duration-input").value,
+  };
+
+function adjust(s) {
+  let dur = durationParse(document.querySelector("#duration-input").value);
+
+  let lastR;
+  let pos = ranges.length - 1;
+  for(let n in ranges) {
+    let r = durationParse(ranges[n]);
+    if (dur == r) {
+      pos = 1*n;
+      break;
+    } else if (lastR != null && dur > lastR) {
+      pos = (1*n) - 1 + (s > 0 ? -1 : 0);
+      break;
+    }
+    lastR = r;
+  }
+
+  if (ranges[pos+s]) {
+    globalOptions.duration = document.querySelector("#duration-input").value = ranges[pos+s];
+    graphs.forEach(graph => graph.fetchData());
+  }
+}
+
+
+  document.querySelector("#time-input").value = formatTimestamp(globalOptions.endTime);
+// XXX:
+  document.querySelector("#time-input").className = "default";
+
+      let defaultPlotOpts = {
+        class: "chart",
+        spanGaps: false,
+        legend: {
+          show: false,
+        },
+        plugins: [
+          labelSelect(),
+        ],
+        cursor: {
+          sync: {
+            key: "a",
+            setSeries: true,
+          },
+          focus: {
+            alpha: 0.3,
+            prox: 10,
+          },
+        },
+      };
+
+class PromGraph {
+  constructor(query) {
+    this.query = query;
+  }
+
+  _makeDiv(c) {
+    let div = document.createElement("div");
+    div.className = c;
+    return div;
+  }
+
+  // add must be called before fetchData, so the size of the area to be rendered into is known.
+  add(grid) {
+    let container = this._makeDiv('graph-cont');
+    let titleEl = this._makeDiv('graph-title')
+    titleEl.textContent = this.query;
+    let self = this;
+    titleEl.addEventListener("click", e => {
+      if (e.target.className == "graph-title graph-edit") {
+        return;
+      }
+      if (e.target.className != "graph-title") {
+        return;
+      }
+      let ta = document.createElement("textarea");
+      ta.value = self.query;
+      e.target.removeChild(e.target.firstChild);
+      e.target.appendChild(ta);
+      e.target.className = "graph-title graph-edit";
+      self.resize();
+      ta.focus();
+      ta.addEventListener("blur", e => {
+        self.query = ta.value;
+        titleEl.removeChild(titleEl.firstChild);
+        titleEl.className = 'graph-title';
+        titleEl.textContent = self.query;
+        self.fetchData();
+      });
+    });
+    container.appendChild(titleEl);
+    let graph = this._addGraph();
+    container.appendChild(graph);
+    grid.add(container);
+  }
+
+  _addGraph() {
+    let graph = this._makeDiv('graph-item');
+    this.graph = graph;
+    return graph;
+  }
+
+  resize() {
+    let container = this.graph.parentElement;
+    this.graph.remove();
+    this.uplot = null;
+    container.appendChild(this._addGraph());
+    if (this.seriesData) {
+      this._renderGraph();
+    }
+  }
+
+  fetchData() {
+    const endTime = Math.floor((globalOptions.endTime).getTime()/1e3);
+    const startTime = endTime - durationParse(globalOptions.duration);
+    let ns = endTime - startTime;
+    let step = Math.max(10, Math.floor(ns / this.graph.clientWidth));
+    let expected = Math.floor(ns / step) + 1;
+
+    let seriesData = Array();
+    seriesData[0] = Array(expected);
+    for (let i = 0; i < expected; i++) {
+      seriesData[0][i] = startTime + (i*step);
+    }
+
+    let self = this;
+    this.labels = {};
+    promapi.query_range(this.query, startTime, endTime, step).then(json => {
+      let graph = self.graph;
+      if (json.status != 'success') {
+        graph.textContent = json.error;
+        return;
+      }
+      if (json.data.resultType != 'matrix') {
+        graph.textContent = "Expected matrix, got " + json.data.resultType;
+        return;
+      }
+      const matrix = json.data.result;
+      if (matrix.length == 0) {
+        graph.textContent = "No series returned.";
+        // todo: clearer to just render an empty graph? except uplot doesn't support that...
+        return;
+      }
+      let series = [ {} ];
+      for (let i = 0; i < matrix.length; i++) {
+        for (let name in matrix[i].metric) {
+          //if (name != "__name__") {
+            if (!self.labels[name]) {
+              self.labels[name] = {};
+            }
+            self.labels[name][matrix[i].metric[name]] = 1;
+          //}
+        }
+        series.push({
+          label: textLabel(matrix[i].metric),
+          color: "red",
+          width: 1,
+        });
+
+        let data = Array(expected);
+        for (let j = 0; j < matrix[i].values.length; j++) {
+          const value = matrix[i].values[j];
+          if (startTime + (j*step) != value[0]) {
+           let pos = Math.floor((value[0] - startTime) / step);
+           if (pos >= 0 && pos < expected) {
+             data[pos] = value[1] === null ? null : 1*value[1];
+           }
+           continue;
+          }
+          data[j] = value[1] === null ? null : 1*value[1];
+        }
+        seriesData[i+1] = data;
+      }
+
+      console.log("series:", series);
+      console.log("data:", seriesData);
+      self.series = series;
+      self.seriesData = seriesData;
+      if (self.uplot) {
+        self.uplot.root.remove();
+        self.uplot = null;
+      }
+      self._renderGraph();
+    });
+  }
+
+  _renderGraph() {
+    let opts = Object.assign({
+      width: this.graph.clientWidth,
+      height: this.graph.clientHeight,
+      series: this.series,
+    }, defaultPlotOpts);
+    // console.log(opts);
+
+    try {
+      this.uplot = new uPlot.Line(opts, this.seriesData, this.graph);
+    } catch(e) {
+      this.graph.textContent = e;
+      throw e;
+    }
+
+    this.graph.addEventListener("mouseleave", e => {
+      setTimeout(() => {
+        document.querySelector("#time-input").value = formatTimestamp(globalOptions.endTime);
+        document.querySelector("#time-input").className = "default";
+      }, 0);
+    });
+    this.graph.addEventListener("mouseenter", e => {
+      document.querySelector("#time-input").className = "";
+    });
+
+    let sidebar = document.querySelector("#sidebar");
+    // XXX: this is just in the wrong place, make sidebar own a list of labels, needed for multiple graphs anyway
+    while(sidebar.lastChild) {
+      sidebar.removeChild(sidebar.lastChild);
+    }
+    for (let l in this.labels) {
+      let el = this._makeDiv("label");
+      el.textContent = l;
+      sidebar.appendChild(el);
+      for (let v in this.labels[l]) {
+        let el = this._makeDiv("value");
+        el.textContent = v;
+        sidebar.appendChild(el);
+      }
+    }
+  }
+}
+
+function textLabel(metric) {
+  return [metric.__name__,
+    '{',
+    Object.keys(metric).filter(k => k != '__name__').map(k => k + "=" + quote(metric[k])).join(","),
+    '}'].join("");
+}
+
+function quote(n) {
+  return '"' + n.replace(/"/g, '\\"') + '"';
+}
+
+let graphs = [];
+['node_filesystem_free_bytes{device=~"/dev/vda.*"}', "up"].forEach(query => {
+  let graph = new PromGraph(query);
+  graph.add(grid);
+  graph.fetchData();
+  graphs.push(graph);
+});
+
+(function() {
+  let timeout;
+  window.addEventListener("resize", function(e) {
+    if (!timeout) {
+      timeout = setTimeout(() => {
+        grid.resize();
+        graphs.forEach(graph => graph.resize());
+        timeout = 0;
+      }, 20);
+    }
+  });
+})();
+
+  </script>
+</body>
