@@ -457,7 +457,7 @@ class PromGraph {
     // console.log(opts);
 
     try {
-      this.uplot = new uPlot.Line(opts, this.seriesData, this.graph);
+      this.uplot = new uPlot(opts, this.seriesData, this.graph);
     } catch(e) {
       this.graph.textContent = e;
       throw e;
